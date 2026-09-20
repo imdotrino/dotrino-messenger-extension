@@ -17,7 +17,7 @@ This extension is part of the open-source [Dotrino](https://github.com/imdotrino
 
 - **No analytics.** No telemetry, no usage tracking, no third-party SDKs.
 - **No advertising.**
-- **No remote code.** All JavaScript is bundled with the extension and reviewable in the [public repository](https://github.com/imdotrino/dotrino-messenger_extension). No `eval`, no remotely loaded scripts.
+- **No remote code.** All JavaScript is bundled with the extension and reviewable in the [public repository](https://github.com/imdotrino/dotrino-messenger-extension). No `eval`, no remotely loaded scripts.
 - **No reading the contents of pages you visit.** The overlay is injected as a Shadow-DOM root and does not access the host page's DOM, cookies, or storage.
 - **No selling, sharing, or transferring** of any data to third parties.
 
@@ -45,4 +45,4 @@ You can clear all extension data at any time:
 
 ## Contact
 
-Open an issue at [github.com/imdotrino/dotrino-messenger_extension/issues](https://github.com/imdotrino/dotrino-messenger_extension/issues).
+Open an issue at [github.com/imdotrino/dotrino-messenger-extension/issues](https://github.com/imdotrino/dotrino-messenger-extension/issues).

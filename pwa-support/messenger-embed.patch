@@ -1,0 +1,1181 @@
+diff --git b/src/App.vue a/src/App.vue
+index d685bf6..5fa29cb 100644
+--- b/src/App.vue
++++ a/src/App.vue
+@@ -154,8 +154,9 @@ const playBeep = () => {
+   } catch (_) { /* autoplay bloqueado hasta interacción: ignorar */ }
+ }
+ 
+-// Notificación centrada de DM entrante. Solo se enseña la primera vez que se ve
+-// un DM nuevo: lo ya mostrado queda anotado (services/displayedMessages).
++// Notificación centrada de DM entrante. Solo el primer contexto que vea un
++// DM nuevo (chequeo atómico contra `cc-displayed-msgs-v1` en chrome.storage)
++// lo muestra; los demás (otras pestañas con FAB, popup, offscreen) skip.
+ const incomingNotification = ref(null)
+ const onIncomingDone = (id) => {
+   if (incomingNotification.value?.id === id) incomingNotification.value = null
+@@ -163,7 +164,7 @@ const onIncomingDone = (id) => {
+ watch(() => threads.lastIncomingDM, async (dm) => {
+   if (!dm?.id) return
+   const wasNew = await markDisplayed(dm.id)
+-  if (!wasNew) return  // ya se mostró antes
++  if (!wasNew) return  // otra pestaña ya lo mostró
+   incomingNotification.value = dm
+   playBeep()
+ })
+@@ -172,39 +173,66 @@ watch(() => threads.lastIncomingDM, async (dm) => {
+ const showSidebarMobile = ref(!threads.activePubkey)
+ 
+ onMounted(async () => {
+-  // Bootstrap: fuerza el getIdentity() inicial antes de decidir si mostramos el
+-  // NicknameModal. Si la vault tiene me.nickname, tomamos ese nick automáticamente.
+-  try {
+-    const id = await getIdentity()
+-    console.log('[cc-app] boot id.me=', id?.me, 'connection.nickname=', connection.nickname)
+-    if (id) {
+-      // Pilares para el botón/modal de perfil del topbar (§6.1).
+-      identityInst.value = id
+-      reputationInst.value = await getReputation()
+-      escucharVault(id)
+-      const vaultNick = id.me?.nickname
+-      if (vaultNick && vaultNick !== connection.nickname) {
+-        // El vault es la fuente de verdad: si trae nickname y difiere del
+-        // local (incluido un placeholder pegado de sesiones previas), lo
+-        // aplicamos.
+-        console.log('[cc-app] boot: applying nickname from vault →', vaultNick)
+-        connection.setNickname(vaultNick)
+-      } else if (!vaultNick && connection.nicknameSet) {
+-        // El apodo local sí es de ESTA cuenta: su clave va namespaceada por el
+-        // perfil activo (services/account.js). Antes no lo estaba, y esta misma
+-        // línea le escribía a una cuenta recién nacida el nombre de la anterior
+-        // —dejando dos cuentas con el mismo nombre y distinta llave—, que es de
+-        // donde salía el «el perfil no era coherente».
+-        console.log('[cc-app] boot: backfilling vault.me.nickname from this account →', connection.nickname)
+-        await id.setMyNickname(connection.nickname).catch(e => console.warn('backfill failed', e))
++  // Bootstrap: fuerza el getIdentity() inicial para que en modo iframe el
++  // bridge intente hidratar el vault desde chrome.storage.local antes de
++  // decidir si mostramos NicknameModal o CTA. Si la vault tiene me.nickname
++  // (después de importar el blob), tomamos ese nick automáticamente.
++  // Si estamos en overlay sobre página HTTP, ni siquiera tratamos de cargar
++  // la vault: crypto.subtle no existe → falla seguro.
++  if (!blockedByInsecureTop) {
++    try {
++      const id = await getIdentity()
++      console.log('[cc-app] boot id.me=', id?.me, 'connection.nickname=', connection.nickname)
++      if (id) {
++        // Pilares para el botón/modal de perfil del topbar (§6.1).
++        identityInst.value = id
++        reputationInst.value = await getReputation()
++        escucharVault(id)
++        const vaultNick = id.me?.nickname
++        const havePubkey = !!id.me?.publickey
++        if (vaultNick && vaultNick !== connection.nickname) {
++          // El vault es la fuente de verdad: si trae nickname y difiere del
++          // local (incluido un placeholder pegado de sesiones previas), lo
++          // aplicamos. En overlay no escribe al vault para no contaminar.
++          console.log('[cc-app] boot: applying nickname from vault →', vaultNick)
++          connection.setNickname(vaultNick, { writeToVault: !isReadOnlyEmbed })
++        } else if (!vaultNick && connection.nicknameSet && !isReadOnlyEmbed) {
++          // El apodo local sí es de ESTA cuenta: su clave va namespaceada por el
++          // perfil activo (services/account.js). Antes no lo estaba, y esta misma
++          // línea le escribía a una cuenta recién nacida el nombre de la anterior
++          // —dejando dos cuentas con el mismo nombre y distinta llave—, que es de
++          // donde salía el «el perfil no era coherente».
++          console.log('[cc-app] boot: backfilling vault.me.nickname from this account →', connection.nickname)
++          await id.setMyNickname(connection.nickname).catch(e => console.warn('backfill failed', e))
++        } else if (!vaultNick && !connection.nicknameSet && havePubkey && isReadOnlyEmbed) {
++          // Overlay con vault hidratado pero sin nickname — el blob fue
++          // publicado por una versión vieja que no sincronizaba el nickname.
++          // Aceptamos un placeholder derivado del pubkey para desbloquear la
++          // UI; el usuario puede actualizar su nick en messenger.dotrino.com
++          // directo y se propagará al overlay.
++          let derived = t.value.fallbackNick
++          try {
++            const pk = JSON.parse(id.me.publickey)
++            derived = (pk?.x || '').slice(0, 6).toUpperCase() || t.value.fallbackNick
++          } catch (_) {}
++          console.log('[cc-app] boot: overlay placeholder nickname →', derived)
++          connection.setNickname(derived, { writeToVault: false })
++        }
+       }
+-    }
+-  } catch (e) { console.warn('[cc-app] boot identity failed:', e) }
++    } catch (e) { console.warn('[cc-app] boot identity failed:', e) }
++  }
+   booting.value = false
+-  if (connection.nicknameSet) {
++  // Overlay no abre conexión propia ni hace announceToKnown — el offscreen
++  // mantiene una sola conexión por usuario y procesa los sends de overlays
++  // vía cc-outbound-v1. Popup/offscreen/direct tab sí conectan normalmente.
++  if (connection.nicknameSet && !isReadOnlyEmbed) {
+     await connection.connect()
+     await contacts.refreshPeers()
+     setTimeout(announceToKnown, 500)
++  } else if (connection.nicknameSet && isReadOnlyEmbed) {
++    // Mark connected (UI dot) — los sends salen por relay.
++    await connection.connect()
++    await contacts.refreshPeers()
+   }
+   maybeStartTutorial()
+   // Después del tutorial (que se salta solo cuando hay enlace entrante).
+@@ -287,9 +315,30 @@ useBackLayer(ratingFor, { onClose: () => { ratingFor.value = null } })
+ const convoOpen = computed(() => !!threads.activePubkey)
+ useBackLayer(convoOpen, { onClose: backToList })
+ 
+-// Tutorial guiado (una sola vez por dispositivo). Solo con apodo y en visita
+-// "limpia" (sin enlace entrante).
++// Modo overlay: storage particionado, no podemos crear identidad útil aquí.
++// Si no llega blob por el bridge, mostramos un CTA al messenger directo en vez
++// del NicknameModal. El usuario crea/usa su cuenta en messenger.dotrino.com
++// (top-level real, unpartitioned) y la extensión propaga el blob al overlay.
++const embed = new URLSearchParams(location.search).get('embed')
++const isReadOnlyEmbed = embed === 'overlay'
++// Embebidos en un iframe de la extensión: main.js NO instala el controlador de
++// "volver" a propósito (ahí no manejamos el history del padre). Le pasamos
++// `no-back` al topbar para que tampoco lo instale él (lo hace si falta).
++const embedInIframe = !!embed && window !== window.top
++// Si la página padre es HTTP, el iframe HTTPS queda non-secure-context y
++// `crypto.subtle` no existe — la vault no puede arrancar, así que ni siquiera
++// intentamos. CTA inmediato.
++const blockedByInsecureTop = isReadOnlyEmbed && !window.isSecureContext
++const openMessengerTab = () => {
++  try { window.open('https://messenger.dotrino.com/', '_blank', 'noopener') }
++  catch (_) { location.href = 'https://messenger.dotrino.com/' }
++}
++
++// Tutorial guiado (una sola vez por dispositivo). Solo en la app real: con apodo,
++// fuera del overlay/iframe, y en visita "limpia" (sin enlace entrante).
+ const maybeStartTutorial = () => {
++  if (isReadOnlyEmbed || blockedByInsecureTop) return
++  if (typeof window !== 'undefined' && window.self !== window.top) return
+   if ((location.hash || '').replace(/^#/, '')) return
+   if (!connection.nicknameSet) return
+   startAppTutorial({
+@@ -306,6 +355,18 @@ const maybeStartTutorial = () => {
+   <!-- Boot: esperamos al getIdentity() inicial antes de decidir qué pintar. -->
+   <div v-if="booting" class="login-cta"><div class="login-card"><p>{{ t.boot.loading }}</p></div></div>
+ 
++  <!-- Overlay sin identidad: no permitimos crear cuenta aquí (storage
++       particionado por el site visitado). En su lugar, CTA al messenger real. -->
++  <div v-else-if="!connection.nicknameSet && isReadOnlyEmbed" class="login-cta">
++    <div class="login-card">
++      <img class="login-logo" src="/icons/icon-192.png" alt="Dotrino" />
++      <h2>{{ t.login.title }}</h2>
++      <p v-if="blockedByInsecureTop">{{ t.login.insecure }}</p>
++      <p v-else>{{ t.login.intro }}</p>
++      <button class="btn primary-cta" @click="openMessengerTab">{{ t.login.button }}</button>
++    </div>
++  </div>
++
+   <NicknameModal v-else-if="!connection.nicknameSet" @set="handleNicknameSet" />
+ 
+   <div v-else class="app">
+@@ -326,6 +387,7 @@ const maybeStartTutorial = () => {
+       icon="/icons/icon-192.png"
+       brand-href="./"
+       :lang.attr="lang"
++      :no-back="embedInIframe ? '' : null"
+       profile
+       support-href="https://ko-fi.com/dotrino"
+       support-repo="imdotrino/dotrino-messenger"
+@@ -426,6 +488,7 @@ const maybeStartTutorial = () => {
+   text-align: center;
+   max-width: 340px;
+ }
++.login-logo { width: 56px; height: 56px; margin-bottom: 14px; }
+ .login-card h2 { margin: 0 0 8px; font-family: var(--font-headline); font-size: 20px; }
+ .login-card p { margin: 0 0 18px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+ .login-card .btn { width: 100%; }
+diff --git b/src/components/NicknameModal.vue a/src/components/NicknameModal.vue
+index 26727a4..34a6907 100644
+--- b/src/components/NicknameModal.vue
++++ a/src/components/NicknameModal.vue
+@@ -6,8 +6,9 @@ const nick = ref('')
+ const inputEl = ref(null)
+ const valid = (v) => v.trim().length >= 3 && v.trim().length <= 20
+ const submit = () => { if (valid(nick.value)) emit('set', nick.value.trim()) }
+-// Foco programático en lugar de `autofocus`: Chrome lo bloquea en iframes
+-// cross-origin. Esto sí funciona, y donde no, no rompe nada — solo no enfoca.
++// Foco programático en lugar de `autofocus`: Chrome bloquea autofocus en
++// iframes cross-origin (extensión, embed). Esto sí funciona si el iframe
++// tiene el foco, y si no, no rompe nada — solo no enfoca.
+ onMounted(() => { try { inputEl.value?.focus() } catch (_) {} })
+ </script>
+ 
+diff --git b/src/i18n.js a/src/i18n.js
+index 64cc8cb..5bdfee1 100644
+--- b/src/i18n.js
++++ a/src/i18n.js
+@@ -52,6 +52,16 @@ export const messages = {
+       close: 'Cerrar el aviso'
+     },
+ 
++    // Overlay de la extensión: aquí no se puede crear la cuenta, se manda al
++    // messenger real. Sin jerga: nada de "iframe", "storage particionado" ni
++    // "APIs criptográficas" — solo qué hacer.
++    login: {
++      title: 'Inicia sesión',
++      insecure: 'La página donde estás no usa una conexión segura, así que tu cuenta no puede abrirse aquí dentro. Ábrela en su propia pestaña.',
++      intro: 'Crea tu cuenta o entra en messenger.dotrino.com. Se sincroniza sola con la extensión.',
++      button: 'Entrar',
++    },
++
+     topbar: {
+       bell: 'Notificaciones y solicitudes',
+       copyCode: 'Tu código para que te agreguen — tócalo para copiarlo',
+@@ -147,6 +157,9 @@ export const messages = {
+     },
+ 
+     incoming: { newMessage: 'Mensaje nuevo' },
++
++    // Apodo de emergencia cuando el overlay no trae uno (se ve como "@Yo").
++    fallbackNick: 'Yo',
+   },
+ 
+   en: {
+@@ -164,6 +177,13 @@ export const messages = {
+       close: 'Dismiss'
+     },
+ 
++    login: {
++      title: 'Sign in',
++      insecure: 'The page you are on does not use a secure connection, so your account cannot open in here. Open it in its own tab.',
++      intro: 'Create your account or sign in at messenger.dotrino.com. It syncs with the extension on its own.',
++      button: 'Log in',
++    },
++
+     topbar: {
+       bell: 'Notifications and requests',
+       copyCode: 'Your code for people to add you — tap to copy',
+@@ -257,5 +277,7 @@ export const messages = {
+     },
+ 
+     incoming: { newMessage: 'New message' },
++
++    fallbackNick: 'Me',
+   },
+ }
+diff --git b/src/main.js a/src/main.js
+index ab83488..f88354b 100644
+--- b/src/main.js
++++ a/src/main.js
+@@ -10,10 +10,17 @@ import '@dotrino/tutorial'
+ import { createBackNav } from '@dotrino/nav'
+ import { resolveAccount } from './services/account'
+ 
++// Modo embed: cuando la PWA se carga como iframe desde la extensión
++// (popup/overlay/offscreen), recibimos `?embed=popup` o similar y aplicamos
++// estilos compactos vía la clase `cc-embed` en el <html>.
++const embed = new URLSearchParams(location.search).get('embed')
++if (embed) document.documentElement.classList.add('cc-embed')
++
+ // Navegación "volver" unificada del ecosistema (botón físico de Android / gesto
+ // de iOS / atrás del navegador / chevron del header → cierra modal o conversación,
+-// y si no hay nada → dotrino.com).
+-createBackNav()
++// y si no hay nada → dotrino.com). No en iframe embebido: ahí no manejamos el
++// history del padre.
++if (!embed || window === window.top) createBackNav()
+ 
+ // Diagnóstico: imprime contexto al arrancar. Útil para entender si estamos
+ // en secure context, qué origen tenemos, quién es el top-level, etc.
+@@ -25,6 +32,7 @@ try {
+   console.log('[cc-messenger] context', {
+     origin: location.origin,
+     href: location.href,
++    embed: embed || null,
+     isSecureContext: window.isSecureContext,
+     inIframe: window !== window.top,
+     topOrigin,
+@@ -36,6 +44,22 @@ try {
+   })
+ } catch (e) { console.warn('[cc-messenger] context log failed', e) }
+ 
++// Polyfill de crypto.randomUUID: requiere "secure context", que NO se cumple
++// cuando esta PWA va en un iframe dentro de una página padre HTTP (overlay
++// de la extensión sobre sitios http://). En ese caso `crypto.randomUUID` es
++// undefined y libs como `dotrino-store` (sync.js getDeviceId) revientan.
++// Lo emulamos con `crypto.getRandomValues`, que sí está disponible siempre.
++if (typeof crypto !== 'undefined' && typeof crypto.randomUUID !== 'function') {
++  crypto.randomUUID = function () {
++    const b = new Uint8Array(16)
++    crypto.getRandomValues(b)
++    b[6] = (b[6] & 0x0f) | 0x40
++    b[8] = (b[8] & 0x3f) | 0x80
++    const h = [...b].map(x => x.toString(16).padStart(2, '0')).join('')
++    return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`
++  }
++}
++
+ // DE QUÉ CUENTA ES ESTO, ANTES DE PINTAR NADA. Los stores leen su estado local al
+ // construirse, y ese estado cuelga de la cuenta activa (services/account.js). Si se
+ // montara primero, cada store abriría el cajón equivocado —el de la cuenta anterior—
+@@ -62,3 +86,14 @@ if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+     }
+   })
+ }
++
++// Handshake con el embedder: cuando esta PWA se carga como iframe (popup,
++// overlay, offscreen), avisamos al parent que arrancamos. El content script
++// del overlay usa esto para distinguir "cargado correctamente" de "bloqueado
++// por CSP" (en el segundo caso ningún script corre y el postMessage nunca
++// llega → timeout en el padre).
++if (embed && window !== window.top) {
++  try {
++    window.parent.postMessage({ source: 'cc-messenger', type: 'ready', embed }, '*')
++  } catch (_) {}
++}
+diff --git b/src/services/displayedMessages.js a/src/services/displayedMessages.js
+index 0250e85..a10c825 100644
+--- b/src/services/displayedMessages.js
++++ a/src/services/displayedMessages.js
+@@ -1,44 +1,66 @@
+-// Qué DMs entrantes ya se enseñaron como notificación centrada. Persistido en
+-// localStorage, namespaceado por la cuenta activa: así un refresco no vuelve a
+-// mostrar el mismo mensaje.
++// Track which incoming DMs ya se mostraron como notificación centrada.
++// Persistido en `chrome.storage.local` vía el bridge para no repetir el toast
++// cuando el usuario cambia de pestaña (cada pestaña con FAB tiene su propio
++// messenger iframe — sin esto cada uno mostraría el mismo mensaje).
++//
++// Fallback a localStorage si el bridge no responde (pestaña directa sin
++// extensión).
+ 
++import { kvGet, kvSet, onKvChanged } from './identityBridge'
+ import { key as accountKey } from './account'
+ 
+-// Función, no constante: al importar el módulo la cuenta aún no está resuelta.
++// Funciones, no constantes: al importar el módulo la cuenta aún no está resuelta.
++const storageKey = () => accountKey('cc-displayed-msgs-v1')
+ const lsKey = () => accountKey('cc_displayed_msgs_v1')
+ const MAX = 500
+ 
+ let cache = new Set()
+ let loaded = false
+ 
+-function ensureLoaded () {
++async function ensureLoaded () {
+   if (loaded) return
+   loaded = true
++  try {
++    const remote = await kvGet(storageKey())
++    if (Array.isArray(remote)) {
++      cache = new Set(remote)
++      return
++    }
++  } catch (_) {}
+   try {
+     const local = JSON.parse(localStorage.getItem(lsKey()) || '[]')
+     if (Array.isArray(local)) cache = new Set(local)
+   } catch (_) {}
+ }
+ 
++// Sincroniza ediciones desde otros contextos (otra pestaña marcó un mensaje).
++onKvChanged((key, value) => {
++  if (key !== storageKey() || !Array.isArray(value)) return
++  cache = new Set(value)
++})
++
+ export async function isDisplayed (id) {
+   if (!id) return true
+-  ensureLoaded()
++  await ensureLoaded()
+   return cache.has(id)
+ }
+ 
+ /**
+  * Marca un id como mostrado. Idempotente. Devuelve `true` si era nuevo,
+- * `false` si ya estaba.
++ * `false` si ya estaba (esto sirve para race conditions: dos pestañas que
++ * intentan mostrar el mismo DM al mismo tiempo, solo el primero verá `true`).
+  */
+ export async function markDisplayed (id) {
+   if (!id) return false
+-  ensureLoaded()
++  await ensureLoaded()
+   if (cache.has(id)) return false
+   cache.add(id)
+   // Cap el set para no crecer indefinido — keep most recent ids.
+   let arr = [...cache]
+   if (arr.length > MAX) arr = arr.slice(-MAX)
+   cache = new Set(arr)
++  // Persistencia: bridge primero, fallback a localStorage.
++  try { await kvSet(storageKey(), arr) } catch (_) {}
+   try { localStorage.setItem(lsKey(), JSON.stringify(arr)) } catch (_) {}
+   return true
+ }
+diff --git b/src/services/identity.js a/src/services/identity.js
+index ec650f4..862a71a 100644
+--- b/src/services/identity.js
++++ a/src/services/identity.js
+@@ -14,10 +14,139 @@
+ // sola vez en este módulo y todos comparten el mismo objeto Identity.
+ 
+ import { Identity } from '@dotrino/identity'
++import { getIdentityBlob, setIdentityBlob, onIdentityBlobChanged } from './identityBridge'
+ 
+ let _instance = null
+ let _connectPromise = null
+ 
++// Estado del bridge para evitar loops:
++//  - `_lastPushedHash`: blob ya publicado (skip si no cambia).
++//  - `_isImporting`: flag mientras corremos `id.importIdentity` desde el
++//    bridge — los mutadores que dispare el import (saveMe, savePeers en el
++//    vault) NO deben volver a pushear, sino se forma un loop entre contextos.
++let _lastPushedHash = null
++let _isImporting = false
++
++function hashBlob (blob) {
++  if (!blob) return ''
++  // Excluimos `exportedAt` — vault lo regenera con `new Date().toISOString()`
++  // en cada `exportIdentity()`, así que un JSON.stringify directo siempre
++  // difiere y el dedup no aplicaría.
++  try {
++    const { exportedAt, ...rest } = blob
++    const s = JSON.stringify(rest)
++    let h = 0
++    for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
++    return s.length + ':' + h
++  } catch { return Math.random().toString(36) }
++}
++
++async function bridgeImportIfAvailable (id) {
++  if (window === window.top) return
++  try {
++    const blob = await getIdentityBlob()
++    if (!blob) return
++    _isImporting = true
++    try {
++      await id.importIdentity(blob)
++      _lastPushedHash = hashBlob(blob)  // ya está sincronizado con el bridge
++    } finally { _isImporting = false }
++    console.log('[cc-id-bridge] vault hydrated from the bridge')
++  } catch (e) {
++    console.warn('[cc-id-bridge] initial import failed:', e?.message || e)
++  }
++}
++
++// Debounced: si recibimos muchos updates seguidos (típico cuando llegan
++// varios HELLOs y cada uno hace markOnline → updateContact), coalescemos en
++// un solo push tras un intervalo de quietud. Evita inundar chrome.storage.
++let _pushTimer = null
++let _pushPendingId = null
++const PUSH_DEBOUNCE_MS = 800
++
++function bridgePush (id) {
++  if (_isImporting) return
++  _pushPendingId = id
++  if (_pushTimer) clearTimeout(_pushTimer)
++  _pushTimer = setTimeout(() => {
++    _pushTimer = null
++    const target = _pushPendingId
++    _pushPendingId = null
++    _doPush(target).catch(() => {})
++  }, PUSH_DEBOUNCE_MS)
++}
++
++async function _doPush (id) {
++  if (_isImporting) return
++  try {
++    const blob = await id.exportIdentity()
++    if (!blob) return
++    const h = hashBlob(blob)
++    if (h === _lastPushedHash) return
++    _lastPushedHash = h
++    await setIdentityBlob(blob)
++  } catch (e) {
++    console.warn('[cc-id-bridge] push failed:', e?.message || e)
++  }
++}
++
++// El modo `overlay` corre en un site cualquiera y vive en un partition
++// aislado: NO debe escribir identidad. Solo recibe. Los modos `popup` y
++// `offscreen` corren en chrome-extension://, tienen storage unpartitioned
++// vía host_permissions y SÍ son fuente de verdad — propagamos sus cambios.
++function isWriteAuthorisedEmbed () {
++  if (window === window.top) return true  // pestaña normal: source of truth
++  const embed = new URLSearchParams(location.search).get('embed')
++  // Solo offscreen escribe entre los embeds. El popup pineado IMPORTA del
++  // bridge pero NO empuja: el iframe `id.dotrino.com` anidado dentro del
++  // popup no garantiza acceso unpartitioned (nested iframe en extension page),
++  // así que su vault podría tener partition propia con claves fresh. Si pushea
++  // sobreescribe la identidad real → la pestaña directa se ve como usuario
++  // nuevo. Mejor consumirlo solo.
++  return embed === 'offscreen'
++}
++
++// Wraps a few mutating methods so each successful call snapshots the vault
++// to the bridge automatically. Si el lib agrega más mutadores en el futuro,
++// añadirlos aquí.
++function attachAutoPush (id) {
++  if (!isWriteAuthorisedEmbed()) return
++  const MUTATORS = [
++    'addContact', 'updateContact', 'removeContact',
++    'setMyNickname', 'setRating', 'forgetPeer',
++    'mergeEndorsements', 'recordQuery'
++  ]
++  for (const name of MUTATORS) {
++    const orig = id[name]
++    if (typeof orig !== 'function') continue
++    id[name] = async function (...args) {
++      const result = await orig.apply(id, args)
++      // `bridgePush` es void (programa un push con debounce y traga sus
++      // propios errores en `_doPush`). NO devuelve promesa, así que un
++      // `.catch()` aquí reventaba el mutador entero tras una escritura ya
++      // exitosa: el contacto quedaba en el vault pero `addContact` rechazaba,
++      // se saltaba el `refresh()` y la lista no se actualizaba hasta recargar.
++      bridgePush(id)
++      return result
++    }
++  }
++}
++
++// Cambios externos del blob (otros contextos): re-importamos para mantener
++// este vault al día sin recargar la página. Aplica a todos los modos embed.
++function attachExternalSync (id) {
++  if (window === window.top) return
++  onIdentityBlobChanged(async (blob) => {
++    if (!blob) return
++    const h = hashBlob(blob)
++    if (h === _lastPushedHash) return  // ya estamos al día (probablemente lo escribimos nosotros)
++    _isImporting = true
++    try { await id.importIdentity(blob); _lastPushedHash = h }
++    catch (e) { console.warn('[cc-id-bridge] re-import on change failed:', e?.message || e) }
++    finally { _isImporting = false }
++  })
++}
++
+ /**
+  * Devuelve la instancia compartida del Identity vault, esperando a que
+  * `ready` haya completado. Reutiliza la promesa entre llamadas concurrentes.
+@@ -29,7 +158,16 @@ export async function getIdentity () {
+   if (_connectPromise) return _connectPromise
+   _connectPromise = (async () => {
+     try {
+-      _instance = await Identity.connect()
++      const inst = await Identity.connect()
++      await bridgeImportIfAvailable(inst)
++      attachAutoPush(inst)
++      attachExternalSync(inst)
++      // Push inicial sin debounce: queremos el blob en chrome.storage.local
++      // desde el primer momento del boot, no después de la primera mutación.
++      if (isWriteAuthorisedEmbed()) {
++        _doPush(inst).catch(() => {})
++      }
++      _instance = inst
+       return _instance
+     } catch (e) {
+       console.warn('Identity vault unreachable:', e)
+diff --git b/src/services/identityBridge.js a/src/services/identityBridge.js
+new file mode 100644
+index 0000000..a7d6c5d
+--- /dev/null
++++ a/src/services/identityBridge.js
+@@ -0,0 +1,154 @@
++// Bridge de identidad: cuando el messenger corre como iframe dentro de la
++// extensión (popup, overlay, offscreen), usa `chrome.storage.local` (vía
++// postMessage al host script de la extensión) como fuente compartida del
++// blob de identidad. Esto puentea el storage partitioning: el offscreen
++// (unpartitioned) escribe el blob real, los overlays (particionados por
++// el site visitado) lo leen al arrancar e importan la identidad antes de
++// crear una nueva en su bucket aislado.
++//
++// El protocolo es muy simple: postMessage al parent con
++//   { source:'cc-id-bridge', type:'request', id, op:'get'|'set'|'clear', blob? }
++// y el host responde con
++//   { source:'cc-id-bridge', type:'response', id, result?, error? }
++// (definido en extension/identity-bridge-host.js).
++
++let _nextId = 1
++const _pending = new Map()
++let _wired = false
++
++// Disponibilidad del bridge: solo existe un host (`identity-bridge-host.js`)
++// cuando el messenger corre DENTRO de la extensión (overlay/popup/offscreen) o
++// cuando el content script de la extensión lo inyecta en messenger.dotrino.com.
++// Como PWA standalone sin la extensión NO hay host: sin esta sonda cada `call`
++// esperaba 3s a un timeout (y spameaba la consola) en cada arranque. Sondeamos
++// una vez con un timeout corto y cacheamos el resultado; si no hay host, todas
++// las ops se cortan de inmediato devolviendo su default.
++let _available = null  // Promise<boolean> | null
++const PROBE_TIMEOUT_MS = 800
++
++function probeBridge () {
++  ensureWired()
++  const target = window.parent !== window ? window.parent : window
++  return new Promise((resolve) => {
++    const id = _nextId++
++    const timer = setTimeout(() => { _pending.delete(id); resolve(false) }, PROBE_TIMEOUT_MS)
++    // Cualquier respuesta del host (resultado o error) prueba que existe.
++    const seen = () => { clearTimeout(timer); resolve(true) }
++    _pending.set(id, { resolve: seen, reject: seen, timer })
++    try {
++      target.postMessage({ source: 'cc-id-bridge', type: 'request', id, op: 'get' }, '*')
++    } catch { _pending.delete(id); clearTimeout(timer); resolve(false) }
++  })
++}
++
++/** True si hay un host del bridge respondiendo (extensión presente). Cacheado. */
++export function bridgeAvailable () {
++  if (!_available) _available = probeBridge()
++  return _available
++}
++
++// chrome.storage serializa con JSON, así que pasamos un clon JSON-safe: elimina
++// Proxies reactivos de Vue, funciones y demás valores no estructurables-clonables
++// que rompían `postMessage` con "could not be cloned".
++function jsonSafe (v) {
++  if (v == null || typeof v !== 'object') return v
++  try { return JSON.parse(JSON.stringify(v)) } catch { return v }
++}
++
++function ensureWired () {
++  if (_wired) return
++  _wired = true
++  window.addEventListener('message', (ev) => {
++    const m = ev.data
++    if (!m || m.source !== 'cc-id-bridge') return
++    if (m.type === 'response' && _pending.has(m.id)) {
++      const { resolve, reject, timer } = _pending.get(m.id)
++      _pending.delete(m.id)
++      clearTimeout(timer)
++      if (m.error) reject(new Error(m.error))
++      else resolve(m.result)
++    }
++  })
++}
++
++function call (op, payload = {}) {
++  ensureWired()
++  // Si estamos en pestaña directa (window === window.top) no hay parent, pero
++  // el content script de la extensión inyecta `identity-bridge-host.js`
++  // también en messenger.dotrino.com. Esa lista en el mismo `window` (en
++  // su isolated world), así que basta con `window.postMessage` a sí mismo.
++  const target = window.parent !== window ? window.parent : window
++  return new Promise((resolve, reject) => {
++    const id = _nextId++
++    const timer = setTimeout(() => {
++      _pending.delete(id)
++      console.warn('[cc-id-bridge:client] timeout', { id, op })
++      reject(new Error('cc-id-bridge timeout'))
++    }, 3000)
++    _pending.set(id, { resolve, reject, timer })
++    try {
++      console.log('[cc-id-bridge:client] →', { id, op, hasBlob: !!payload.blob })
++      target.postMessage({ source: 'cc-id-bridge', type: 'request', id, op, ...payload }, '*')
++    } catch (e) {
++      _pending.delete(id)
++      clearTimeout(timer)
++      reject(e)
++    }
++  })
++}
++
++/** Lee el blob de identidad del bridge. Devuelve null si no hay o no hay parent. */
++export async function getIdentityBlob () {
++  if (!(await bridgeAvailable())) return null
++  try { return await call('get') }
++  catch (e) { console.warn('[cc-id-bridge] get failed:', e.message); return null }
++}
++
++/** Guarda el blob de identidad (snapshot completo) al bridge. */
++export async function setIdentityBlob (blob) {
++  if (!(await bridgeAvailable())) return false
++  try { await call('set', { blob: jsonSafe(blob) }); return true }
++  catch (e) { console.warn('[cc-id-bridge] set failed:', e.message); return false }
++}
++
++/** Suscribe a cambios remotos del blob (otros contextos lo escribieron). */
++export function onIdentityBlobChanged (handler) {
++  ensureWired()
++  const listener = (ev) => {
++    const m = ev.data
++    if (m?.source === 'cc-id-bridge' && m.type === 'changed') handler(m.blob)
++  }
++  window.addEventListener('message', listener)
++  return () => window.removeEventListener('message', listener)
++}
++
++// ---- KV genérico (chrome.storage.local) -----------------------------------
++// Las claves deben prefijarse con `cc-` (validado en el host).
++
++export async function kvGet (key) {
++  if (!(await bridgeAvailable())) return null
++  try { return await call('kv-get', { key }) }
++  catch (e) { console.warn('[cc-id-bridge] kv-get failed:', e.message); return null }
++}
++
++export async function kvSet (key, value) {
++  if (!(await bridgeAvailable())) return null
++  try { return await call('kv-set', { key, value: jsonSafe(value) }) }
++  catch (e) { console.warn('[cc-id-bridge] kv-set failed:', e.message); return null }
++}
++
++export async function kvAppendArray (key, item) {
++  if (!(await bridgeAvailable())) return null
++  try { return await call('kv-append-array', { key, item: jsonSafe(item) }) }
++  catch (e) { console.warn('[cc-id-bridge] kv-append failed:', e.message); return null }
++}
++
++export function onKvChanged (handler) {
++  ensureWired()
++  const listener = (ev) => {
++    const m = ev.data
++    if (m?.source === 'cc-id-bridge' && m.type === 'kv-changed') handler(m.key, m.value)
++  }
++  window.addEventListener('message', listener)
++  return () => window.removeEventListener('message', listener)
++}
+diff --git b/src/services/proxyRelay.js a/src/services/proxyRelay.js
+new file mode 100644
+index 0000000..4ed49ca
+--- /dev/null
++++ a/src/services/proxyRelay.js
+@@ -0,0 +1,60 @@
++// Outbound relay: cuando el messenger corre como overlay (FAB en cualquier
++// site HTTPS), no abre WebSocket propio — encolaría una conexión más al proxy
++// por cada pestaña HTTPS abierta. En su lugar, encola operaciones del proxy
++// (`send`, `sendByPubkey`) en `chrome.storage.local` bajo `cc-outbound-v1`.
++// El offscreen, que sí mantiene la conexión, escucha onChanged sobre esa
++// clave y procesa cada item con su `wsProxyClient`.
++//
++// El popup pineado y la pestaña directa de messenger.dotrino.com NO usan
++// este relay: son interacciones intencionales del usuario, una conexión a
++// la vez es aceptable y mantiene latencia mínima.
++
++import { kvGet, kvSet, kvAppendArray, onKvChanged } from './identityBridge'
++
++const QUEUE_KEY = 'cc-outbound-v1'
++
++let _seq = 0
++const newId = () => `${Date.now()}-${++_seq}`
++
++/** Encola una llamada al proxy. Resuelve cuando se persiste en storage. */
++export async function relayProxyCall (method, args) {
++  const id = newId()
++  await kvAppendArray(QUEUE_KEY, { id, method, args, ts: Date.now() })
++  return id
++}
++
++/**
++ * Solo para offscreen: procesa la cola.
++ * `processor(item)` debe ser async y devolver `true` si se procesó (se quita
++ * de la cola) o `false` para reintentar más tarde.
++ *
++ * Devuelve `{ drain, dispose }`: `drain()` fuerza un re-procesamiento (útil
++ * cuando `isConnected` cambia a true y hay items deferidos), `dispose()` se
++ * desuscribe de onKvChanged.
++ */
++export function watchOutboundQueue (processor) {
++  let inFlight = false
++  const drain = async () => {
++    if (inFlight) return
++    inFlight = true
++    try {
++      const arr = await kvGet(QUEUE_KEY)
++      if (!Array.isArray(arr) || arr.length === 0) return
++      const remaining = []
++      for (const item of arr) {
++        try {
++          const ok = await processor(item)
++          if (!ok) remaining.push(item)
++        } catch (_) {
++          remaining.push(item)
++        }
++      }
++      if (remaining.length !== arr.length) await kvSet(QUEUE_KEY, remaining)
++    } finally { inFlight = false }
++  }
++  drain().catch(() => {})
++  const dispose = onKvChanged((key) => {
++    if (key === QUEUE_KEY) drain().catch(() => {})
++  })
++  return { drain, dispose }
++}
+diff --git b/src/services/threadsBridge.js a/src/services/threadsBridge.js
+new file mode 100644
+index 0000000..0da1679
+--- /dev/null
++++ a/src/services/threadsBridge.js
+@@ -0,0 +1,59 @@
++// Espejo de threads vía chrome.storage.local. Igual que el identity bridge:
++// los contextos con conexión real al proxy (pestaña directa, popup pineado,
++// offscreen) escriben los threads aquí; el overlay (en sites HTTPS sin
++// conexión propia) los LEE para mostrar histórico.
++//
++// Sin esto el overlay muestra el chat vacío porque su `messenger.dotrino.com`
++// localStorage está particionado por el site visitado.
++
++import { kvGet, kvSet, onKvChanged } from './identityBridge'
++
++const BRIDGE_KEY = 'cc-threads-v1'
++const PUSH_DEBOUNCE_MS = 600
++
++let _pushTimer = null
++let _lastHash = ''
++let _pendingThreads = null
++
++function hashThreads (threads) {
++  try {
++    const s = JSON.stringify(threads)
++    let h = 0
++    for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
++    return s.length + ':' + h
++  } catch { return Math.random().toString(36) }
++}
++
++/** Encola un push debounced al bridge con el snapshot actual de threads. */
++export function pushThreadsToBridge (threads) {
++  _pendingThreads = threads
++  if (_pushTimer) clearTimeout(_pushTimer)
++  _pushTimer = setTimeout(async () => {
++    _pushTimer = null
++    const snap = _pendingThreads
++    _pendingThreads = null
++    if (!snap) return
++    const h = hashThreads(snap)
++    if (h === _lastHash) return
++    _lastHash = h
++    try { await kvSet(BRIDGE_KEY, snap) } catch (_) {}
++  }, PUSH_DEBOUNCE_MS)
++}
++
++/** Lee el snapshot del bridge (objeto pubkey → array de entries). */
++export async function pullThreadsFromBridge () {
++  try {
++    const v = await kvGet(BRIDGE_KEY)
++    if (v) _lastHash = hashThreads(v)
++    return v && typeof v === 'object' ? v : null
++  } catch { return null }
++}
++
++/** Suscribe a cambios remotos del snapshot. */
++export function onThreadsChanged (handler) {
++  return onKvChanged((key, value) => {
++    if (key !== BRIDGE_KEY) return
++    if (value) _lastHash = hashThreads(value)
++    handler(value || {})
++  })
++}
+diff --git b/src/stores/connectionStore.js a/src/stores/connectionStore.js
+index 53f5b74..4760089 100644
+--- b/src/stores/connectionStore.js
++++ a/src/stores/connectionStore.js
+@@ -4,6 +4,14 @@ import { getWebSocketProxyClient } from '@dotrino/proxy-client'
+ import { getIdentity } from '../services/identity'
+ import { key as accountKey } from '../services/account'
+ import { sanitizeNickname } from '../utils/sanitize'
++import { relayProxyCall, watchOutboundQueue } from '../services/proxyRelay'
++
++const URL_EMBED = new URLSearchParams(typeof location !== 'undefined' ? location.search : '').get('embed')
++// Solo overlay (FAB en sites HTTPS) usa relay: una pestaña con FAB activo
++// cada una abriendo conexión al proxy = spam → ban. Popup pineado y direct
++// tab abren su propia conexión normal.
++const IS_RELAY_MODE = URL_EMBED === 'overlay'
++const IS_OFFSCREEN = URL_EMBED === 'offscreen'
+ 
+ export const useConnectionStore = defineStore('connection', () => {
+   const wsProxyClient = getWebSocketProxyClient()
+@@ -55,8 +63,10 @@ export const useConnectionStore = defineStore('connection', () => {
+   const setNickname = (name, opts = {}) => {
+     nickname.value = sanitizeNickname((name || '').trim())
+     localStorage.setItem(NICK_KEY, nickname.value)
+-    // También guardarlo en la vault, así viaja con `id.exportIdentity()`. Si el
+-    // caller pasa `{ writeToVault: false }` saltamos esto para no contaminarla.
++    // También guardarlo en la vault, así viaja con `id.exportIdentity()` y
++    // los overlays particionados pueden recuperarlo del bridge. Si el caller
++    // pasa `{ writeToVault: false }` (p.ej. el placeholder derivado del
++    // pubkey en overlay) saltamos esto para no contaminar el vault.
+     if (nickname.value && opts.writeToVault !== false) {
+       getIdentity().then(id => id?.setMyNickname?.(nickname.value)).catch(() => {})
+     }
+@@ -66,6 +76,12 @@ export const useConnectionStore = defineStore('connection', () => {
+   const queuedDelivered = ref(0)
+ 
+   const connect = async () => {
++    if (IS_RELAY_MODE) {
++      // Overlay: no abre WebSocket; los sends salen vía cc-outbound-v1.
++      isConnected.value = true
++      console.log('[cc-conn] overlay → relay mode (no direct WebSocket)')
++      return
++    }
+     try {
+       connectionError.value = null
+       await ready  // directorio + auto-selección del mejor nodo (si no hay home fijo)
+@@ -132,6 +148,7 @@ export const useConnectionStore = defineStore('connection', () => {
+     if (!/^wss?:\/\//.test(u) || u === wsUrl.value) return
+     wsUrl.value = u
+     if (persist) localStorage.setItem('messenger_proxy_url', u)
++    if (IS_RELAY_MODE) return
+     disconnect()
+     await connect()
+   }
+@@ -184,7 +201,7 @@ export const useConnectionStore = defineStore('connection', () => {
+   // mejor nodo sano (reputación local + latencia), temporal.
+   let failingOver = false
+   const attemptFailover = async () => {
+-    if (failingOver) return
++    if (failingOver || IS_RELAY_MODE) return
+     failingOver = true
+     try {
+       recordFail(wsUrl.value)
+@@ -203,14 +220,20 @@ export const useConnectionStore = defineStore('connection', () => {
+   // `connect()` espera esto para usar el proxio elegido.
+   const ready = (async () => {
+     await loadNodeDirectory()
+-    if (!localStorage.getItem('messenger_proxy_url')) {
++    if (!IS_RELAY_MODE && !localStorage.getItem('messenger_proxy_url')) {
+       const best = await pickBestProxy()
+       if (best) { wsUrl.value = best; console.log('[cc-conn] auto-selected:', best) }
+     }
+   })()
+ 
+-  const sendMessage = (toTokens, raw) => wsProxyClient.send(toTokens, raw)
+-  const sendByPubkey = (toPubkeys, raw) => wsProxyClient.sendByPubkey(toPubkeys, raw)
++  // Overlay: encola en chrome.storage.local para que el offscreen procese.
++  // Resto: usa wsProxyClient directo.
++  const sendMessage = IS_RELAY_MODE
++    ? (toTokens, raw) => relayProxyCall('send', [toTokens, raw])
++    : (toTokens, raw) => wsProxyClient.send(toTokens, raw)
++  const sendByPubkey = IS_RELAY_MODE
++    ? (toPubkeys, raw) => relayProxyCall('sendByPubkey', [toPubkeys, raw])
++    : (toPubkeys, raw) => wsProxyClient.sendByPubkey(toPubkeys, raw)
+ 
+   // ── El código corto que se comparte ("pásame tu pin") ──────────────────
+   //
+@@ -223,6 +246,7 @@ export const useConnectionStore = defineStore('connection', () => {
+ 
+   const refreshPairingCode = async () => {
+     if (pairingTimer) { clearTimeout(pairingTimer); pairingTimer = null }
++    if (IS_RELAY_MODE) return
+     try {
+       const res = await wsProxyClient.requestPairingCode()
+       pairingCode.value = res?.code || null
+@@ -247,7 +271,7 @@ export const useConnectionStore = defineStore('connection', () => {
+ 
+   /**
+    * Canjea la cita de otra persona.
+-   * @returns {Promise<{ok:boolean, instance?:string, publickey?:string, reason?:'offline'|'invalid'}>}
++   * @returns {Promise<{ok:boolean, instance?:string, publickey?:string, reason?:'offline'|'invalid'|'unavailable'}>}
+    *
+    * El `reason` importa: «no hay red» y «ese código no vale» se arreglan de forma
+    * distinta —una esperando, la otra pidiendo otro código— y decir la segunda
+@@ -255,6 +279,7 @@ export const useConnectionStore = defineStore('connection', () => {
+    * Se distingue por `e.code`, nunca por el texto del error (que se traduce).
+    */
+   const redeemPairingCode = async (code) => {
++    if (IS_RELAY_MODE) return { ok: false, reason: 'unavailable' }
+     if (!(await waitConnected())) return { ok: false, reason: 'offline' }
+     try {
+       const res = await wsProxyClient.redeemPairingCode(code)
+@@ -266,6 +291,23 @@ export const useConnectionStore = defineStore('connection', () => {
+     }
+   }
+ 
++  // Solo el offscreen procesa la cola.
++  let queueWatcher = null
++  if (IS_OFFSCREEN) {
++    queueWatcher = watchOutboundQueue(async (item) => {
++      if (!isConnected.value) return false  // reintenta cuando estemos conectados
++      try {
++        if (item.method === 'send') wsProxyClient.send(...item.args)
++        else if (item.method === 'sendByPubkey') wsProxyClient.sendByPubkey(...item.args)
++        else { console.warn('relay: unknown method', item.method); return true }
++        return true
++      } catch (e) {
++        console.warn('relay: process failed:', e)
++        return false
++      }
++    })
++  }
++
+   const setPresenceChannel = (name) => { presenceChannel.value = name }
+ 
+   const setupHandlers = () => {
+@@ -274,6 +316,8 @@ export const useConnectionStore = defineStore('connection', () => {
+       isConnected.value = true
+       connectionError.value = null
+       recordOk(wsUrl.value)  // el nodo respondió → limpiar su penalización
++      // Re-procesar items deferidos en la cola al (re)conectar.
++      if (queueWatcher) queueWatcher.drain().catch(() => {})
+       // Al (RE)conectar: (1) re-identificarse —activa la cola offline propia y la
+       // reachability por pubkey; sin esto, tras un blip de WS dejabas de recibir—;
+       // (2) reenviar el outbox: DMs que fallaron con el WS caído. Para un destinatario
+diff --git b/src/stores/threadsStore.js a/src/stores/threadsStore.js
+index b30eaec..26c4f53 100644
+--- b/src/stores/threadsStore.js
++++ a/src/stores/threadsStore.js
+@@ -8,6 +8,7 @@ import { getIdentity } from '../services/identity'
+ import { getStore, onVaultChanged } from '../services/store'
+ import { getReputation } from '../services/reputation'
+ import { sanitizeMessage } from '../utils/sanitize'
++import { pushThreadsToBridge, pullThreadsFromBridge, onThreadsChanged } from '../services/threadsBridge'
+ import { key as accountKey } from '../services/account'
+ import { MINE as MI_VERSION, revisar } from '../services/compat'
+ 
+@@ -38,6 +39,9 @@ async function isVouched (pubkey) {
+   } catch (_) { return false }
+ }
+ 
++const URL_EMBED = new URLSearchParams(typeof location !== 'undefined' ? location.search : '').get('embed')
++const IS_OVERLAY_EMBED = URL_EMBED === 'overlay'
++
+ const MAX_THREAD = 1000   // cap per-thread history (server-side cap también)
+ const LEGACY_KEY = 'messenger_threads_v1'  // migración del antiguo localStorage
+ // El espejo local es DE LA CUENTA activa (services/account.js). Sin namespacear, los
+@@ -153,6 +157,8 @@ export const useThreadsStore = defineStore('threads', () => {
+     // perdían para siempre. El guard de «remoto vacío» solo cubría el todo-o-nada.
+     threads.value = mergeThreads(threads.value, next)
+     saveLocalCache(threads.value)
++    // Comparte snapshot completo con los overlays via chrome.storage bridge.
++    if (!IS_OVERLAY_EMBED) pushThreadsToBridge(threads.value)
+   }
+ 
+   // Apend optimista en memoria + escritura asíncrona al store remoto.
+@@ -166,6 +172,10 @@ export const useThreadsStore = defineStore('threads', () => {
+       threads.value[pubkey] = threads.value[pubkey].slice(-MAX_THREAD)
+     }
+     saveLocalCache(threads.value)
++    // Espeja al chrome.storage bridge si NO somos un overlay (los overlays
++    // solo leen). Así popups/offscreen/direct tab convergen en una snapshot
++    // que los overlays lectores pueden hidratar.
++    if (!IS_OVERLAY_EMBED) pushThreadsToBridge(threads.value)
+     const store = await getStore()
+     if (store) {
+       try { await store.appendMessage(pubkey, entry) }
+@@ -182,6 +192,7 @@ export const useThreadsStore = defineStore('threads', () => {
+     if (!e) return
+     Object.assign(e, patch)
+     saveLocalCache(threads.value)
++    if (!IS_OVERLAY_EMBED) pushThreadsToBridge(threads.value)
+     const store = await getStore()
+     if (store) { try { await store.appendMessage(pubkey, e) } catch (_) {} }
+   }
+@@ -198,6 +209,7 @@ export const useThreadsStore = defineStore('threads', () => {
+     if (!nuevas.length) return
+     for (const e of nuevas) e._read = true
+     saveLocalCache(threads.value)
++    if (!IS_OVERLAY_EMBED) pushThreadsToBridge(threads.value)
+     const store = await getStore()
+     if (!store) return
+     for (const e of nuevas) {
+@@ -602,6 +614,25 @@ export const useThreadsStore = defineStore('threads', () => {
+           text: cleanText,
+           ts
+         })
++
++        // Si el PWA está embebido (extensión / future apps), notifica al parent
++        // para que pueda disparar toast/notificación nativa.
++        if (window !== window.parent) {
++          try {
++            window.parent.postMessage({
++              source: 'cc-messenger',
++              type: 'dm-arrived',
++              dm: {
++                id: mid,
++                fromPubkey: senderPubkey,
++                fromNickname: senderNick || senderPubkey.slice(0, 8),
++                text: cleanText,
++                ts,
++                queued: !!meta.queued
++              }
++            }, '*')
++          } catch (_) {}
++        }
+       }
+       // Optional ack — si conocemos token actual, lo mandamos por token;
+       // si no, por pubkey (el ack también puede irse offline).
+@@ -709,13 +740,32 @@ export const useThreadsStore = defineStore('threads', () => {
+     } catch (e) { console.warn('handleRatingReply:', e) }
+   }
+ 
++  // Overlay: hidrata los threads desde chrome.storage.local (espejado por el
++  // popup/offscreen/direct tab) y se queda escuchando cambios. No corremos
++  // `load()` porque store.dotrino.com está particionado por el site visitado
++  // y devuelve vacío.
++  if (IS_OVERLAY_EMBED) {
++    ;(async () => {
++      const remote = await pullThreadsFromBridge()
++      if (remote && Object.keys(remote).length > 0) {
++        threads.value = remote
++        saveLocalCache(threads.value)
++      }
++    })().catch(() => {})
++    onThreadsChanged((snapshot) => {
++      if (!snapshot) return
++      threads.value = snapshot
++      saveLocalCache(threads.value)
++    })
++  }
++
+   // Carga asíncrona — el UI verá hilos aparecer cuando el store responda.
+   // Además, nos suscribimos a `onSync`: el store puede arrancar bloqueado
+   // (sin passphrase) y los hilos cifrados solo aparecen tras unlock + sync.
+   // Sin esto, al refrescar la página los mensajes no se ven porque `load`
+   // corre antes de que el vault esté desbloqueado.
+   const reload = () => load().catch(e => console.warn('threads.load failed:', e))
+-  reload()
++  if (!IS_OVERLAY_EMBED) reload()
+   ;(async () => {
+     const store = await getStore()
+     if (!store?.onSync) return
+@@ -730,7 +780,7 @@ export const useThreadsStore = defineStore('threads', () => {
+   // Con el respaldo por partes (@dotrino/store ≥ 0.11) las lecturas son LOCALES: lo que
+   // se escribió en otro aparato ya no aparece solo al leer, llega por este evento. Sin
+   // esto, un mensaje mandado desde el móvil no se vería aquí hasta recargar la página.
+-  onVaultChanged(() => reload())
++  if (!IS_OVERLAY_EMBED) onVaultChanged(() => reload())
+ 
+   // ---- Solicitudes (bandeja de desconocidos) -----------------------------
+ 
+diff --git b/src/style.css a/src/style.css
+index 21c6b39..90f898a 100644
+--- b/src/style.css
++++ a/src/style.css
+@@ -39,6 +39,30 @@
+ * { box-sizing: border-box; }
+ html, body, #app { height: 100%; margin: 0; }
+ 
++/* Cuando la PWA se carga como iframe desde la extensión (popup, overlay,
++   offscreen), `?embed=...` añade `cc-embed` al <html>. En ese caso usamos
++   100% del iframe y compactamos espacios para evitar overflow en 360x540. */
++html.cc-embed, html.cc-embed body, html.cc-embed #app { height: 100%; min-height: 0; }
++/* Permitimos scroll vertical en .app dentro del iframe: si algún contenido
++   no entra (sidebar largo, modal, etc.), preferimos scroll antes que
++   recorte invisible. La conversación en sí mantiene su propio scroll
++   interno por .messages. */
++html.cc-embed .app { height: 100%; overflow-y: auto; overflow-x: hidden; }
++/* La marca y el icono viven en el shadow del <dotrino-topbar>: se compactan por
++   sus `part`s y su variable de padding, no por selectores de descendencia. */
++html.cc-embed .topbar { --dotrino-topbar-pad: 8px 12px; }
++html.cc-embed .topbar::part(brand-name) { display: none; }
++html.cc-embed .topbar::part(brand-icon) { width: 28px; height: 28px; }
++html.cc-embed .topbar .me { padding: 4px 8px; font-size: 12px; }
++html.cc-embed .topbar .me .tok { font-size: 11px; padding: 2px 6px; }
++html.cc-embed .side-head { padding: 10px 14px; }
++html.cc-embed .layout .sidebar { width: 100%; max-width: 100%; }
++html.cc-embed .layout { position: relative; }
++/* Modo móvil-like: una columna a la vez. */
++html.cc-embed .layout .sidebar { display: none; }
++html.cc-embed .layout .main-pane { display: flex; }
++html.cc-embed .layout.show-side .sidebar { display: flex; }
++html.cc-embed .layout.show-side .main-pane { display: none; }
+ body {
+   background: var(--bg-1);
+   color: var(--text);
+diff --git b/src/utils/sanitize.js a/src/utils/sanitize.js
+index 81ffc8b..5318be1 100644
+--- b/src/utils/sanitize.js
++++ a/src/utils/sanitize.js
+@@ -4,8 +4,9 @@
+  * AQUÍ NO SE ESCAPA HTML, Y ES A PROPÓSITO.
+  *
+  * Todo lo que esta app pinta pasa por la interpolación de Vue (`{{ … }}`) o por
+- * `textContent`: las dos tratan el valor como TEXTO y nunca como marcado, así
+- * que la protección contra HTML inyectado vive en el pintado, no aquí. No hay un solo `v-html` ni un solo `innerHTML` con datos del usuario en
++ * `textContent` (la extensión): las dos tratan el valor como TEXTO y nunca como
++ * marcado, así que la protección contra HTML inyectado vive en el pintado, no
++ * aquí. No hay un solo `v-html` ni un solo `innerHTML` con datos del usuario en
+  * todo el repo, y el test `tests/texto-literal.spec.js` lo fija.
+  *
+  * Escapar además en este punto no protegía de nada y rompía el texto dos veces:

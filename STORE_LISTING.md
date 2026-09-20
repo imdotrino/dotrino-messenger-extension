@@ -39,7 +39,7 @@ How privacy works
 • Messages are end-to-end encrypted with ECDH P-256 key agreement and AES-256-GCM. The relay server cannot decrypt them.
 • The encryption keypair lives in the shared identity vault at id.dotrino.com — the same vault used by every Dotrino app, so your contacts and reputation follow you across the ecosystem.
 • If the recipient is offline, the relay holds the ciphertext in memory for up to 24 hours and delivers it the moment they reconnect. After 24 hours it is dropped.
-• No analytics, no telemetry, no advertising, no third-party SDKs, no remote code. Full source at github.com/imdotrino/dotrino-messenger_extension.
+• No analytics, no telemetry, no advertising, no third-party SDKs, no remote code. Full source at github.com/imdotrino/dotrino-messenger-extension.
 
 Required setup
 1. Visit https://messenger.dotrino.com/ once and pick a nickname. This initialises the shared vault.
@@ -61,8 +61,8 @@ Copy from `PERMISSIONS.md`. Each permission has its own field on the form.
 
 Either:
 
-- `https://github.com/imdotrino/dotrino-messenger_extension/blob/main/PRIVACY.md` (works for review)
-- or, if you prefer a hosted page, enable GitHub Pages on this repo and use `https://dotrino.github.io/dotrino-messenger_extension/PRIVACY.html` (would require a build step or a Jekyll config — the GitHub blob URL is simpler).
+- `https://github.com/imdotrino/dotrino-messenger-extension/blob/main/PRIVACY.md` (works for review)
+- or, if you prefer a hosted page, enable GitHub Pages on this repo and use `https://imdotrino.github.io/dotrino-messenger-extension/PRIVACY.html` (would require a build step or a Jekyll config — the GitHub blob URL is simpler).
 
 ## Single purpose statement
 

@@ -4,7 +4,7 @@
   "short_name": "CC Messenger",
   "version": "1.9.0",
   "description": "End-to-end encrypted P2P messaging overlay on any page. Shares identity, contacts and threads with the Dotrino ecosystem.",
-  "homepage_url": "https://github.com/imdotrino/dotrino-messenger",
+  "homepage_url": "https://github.com/imdotrino/dotrino-messenger-extension",
   "author": "seyacat",
   "icons": {
     "16": "icons/icon-192.png",

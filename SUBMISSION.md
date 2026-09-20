@@ -10,8 +10,8 @@ Step-by-step from "code on disk" to "approved & public listing".
 - [ ] PRIVACY.md and PERMISSIONS.md committed to `main` and reachable on github.com.
 - [ ] `chrome://extensions/` → "Pack extension" produces a valid `.zip` from this folder, OR run:
       ```bash
-      cd dotrino-messenger_extension
-      zip -r ../cc-messenger-extension.zip . -x "*.git*" -x "node_modules/*" -x "*.zip"
+      cd dotrino-messenger-extension
+      zip -r ../dotrino-messenger-extension.zip . -x "*.git*" -x "node_modules/*" -x "*.zip"
       ```
 
 ## 2. Create / configure the developer account
@@ -33,7 +33,7 @@ Step-by-step from "code on disk" to "approved & public listing".
    - For each of `storage`, `offscreen`, `notifications`, `alarms`, `host_permissions`, plus `<all_urls>`: paste the matching paragraph from `PERMISSIONS.md`.
    - "Are you using remote code?" → **No**.
    - "Are you collecting personal/sensitive data?" → **No** (the only PII is the encryption keypair, which never leaves the user's device).
-   - Privacy policy URL: `https://github.com/imdotrino/dotrino-messenger_extension/blob/main/PRIVACY.md`.
+   - Privacy policy URL: `https://github.com/imdotrino/dotrino-messenger-extension/blob/main/PRIVACY.md`.
 4. **"Distribution"** tab:
    - Visibility: **Public** (or Unlisted if you want to soft-launch).
    - Geographies: all.

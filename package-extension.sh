@@ -5,7 +5,7 @@
 set -e
 cd "$(dirname "$0")"
 
-OUT="../../cc-messenger-extension-$(node -e "console.log(require('./manifest.json').version)").zip"
+OUT="../dotrino-messenger-extension-$(node -e "console.log(require('./manifest.json').version)").zip"
 rm -f "$OUT"
 
 zip -r "$OUT" . \
@@ -17,6 +17,8 @@ zip -r "$OUT" . \
   -x "STORE_LISTING.md" \
   -x "SUBMISSION.md" \
   -x "package-extension.sh" \
-  -x "package-extension.ps1"
+  -x "package-extension.ps1" \
+  -x "pwa-support/*" \
+  -x "README.md"
 
 echo "✅ Wrote $OUT ($(wc -c < "$OUT") bytes)"

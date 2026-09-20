@@ -34,7 +34,7 @@ The extension's value proposition is *"see and reply to messages without leaving
 
 ## Remote code
 
-None. All JavaScript inside the extension package is reviewable in the [public source repository](https://github.com/imdotrino/dotrino-messenger). The extension does not use `eval`, dynamic `import()` from remote URLs, or `chrome.scripting.executeScript` with user-supplied code. The cross-origin iframes (`messenger.dotrino.com`, `id.dotrino.com`, `store.dotrino.com`) load their own static JS from the same author's separate open-source repos; the extension only exchanges structured `postMessage` requests with them, never executing their code in the extension's context.
+None. All JavaScript inside the extension package is reviewable in the [public source repository](https://github.com/imdotrino/dotrino-messenger-extension). The extension does not use `eval`, dynamic `import()` from remote URLs, or `chrome.scripting.executeScript` with user-supplied code. The cross-origin iframes (`messenger.dotrino.com`, `id.dotrino.com`, `store.dotrino.com`) load their own static JS from the same author's separate open-source repos; the extension only exchanges structured `postMessage` requests with them, never executing their code in the extension's context.
 
 ## Data handling
 

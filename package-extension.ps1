@@ -5,12 +5,12 @@ $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
 $manifest = Get-Content -Raw -Path manifest.json | ConvertFrom-Json
-$out = "..\..\cc-messenger-extension-$($manifest.version).zip"
+$out = "..\dotrino-messenger-extension-$($manifest.version).zip"
 
 if (Test-Path $out) { Remove-Item $out -Force }
 
 # Stage files (Compress-Archive doesn't support exclusion patterns well)
-$staging = Join-Path $env:TEMP "cc-messenger-extension-stage"
+$staging = Join-Path $env:TEMP "dotrino-messenger-extension-stage"
 if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
 New-Item -ItemType Directory -Path $staging | Out-Null
 
