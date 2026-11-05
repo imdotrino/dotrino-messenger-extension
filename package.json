@@ -1,0 +1,14 @@
+{
+  "name": "dotrino-messenger-extension",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Extensión de Chrome del messenger de Dotrino. Este package.json solo sirve para comprobar los tipos; la versión de la extensión vive en manifest.json.",
+  "license": "MIT",
+  "scripts": {
+    "type-check": "tsc --noEmit -p jsconfig.json"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.3.7",
+    "typescript": "5.9.3"
+  }
+}

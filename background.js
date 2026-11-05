@@ -24,10 +24,11 @@ async function ensureOffscreen () {
       justification: 'Hosts messenger PWA iframe so it can keep a WebSocket connection to the proxy and receive/decrypt incoming DMs even when no browser tab is visible.'
     })
   } catch (e) {
-    if (!/single offscreen/i.test(e.message)) console.warn('offscreen failed:', e)
+    if (!/single offscreen/i.test(/** @type {Error} */ (e).message)) console.warn('offscreen failed:', e)
   }
 }
 
+/** @param {CcDM | null | undefined} dm */
 function notifyDM (dm) {
   if (!dm) return
   chrome.notifications.create({
@@ -39,6 +40,7 @@ function notifyDM (dm) {
   }).catch(() => {})
 }
 
+/** @param {{ kind: string, dm?: CcDM }} msg */
 async function broadcast (msg) {
   // Push to all tabs (overlay) + popup if open.
   try {

@@ -19,6 +19,11 @@ zip -r "$OUT" . \
   -x "package-extension.sh" \
   -x "package-extension.ps1" \
   -x "pwa-support/*" \
+  -x "package.json" \
+  -x "package-lock.json" \
+  -x "jsconfig.json" \
+  -x ".npmrc" \
+  -x "types/*" \
   -x "README.md"
 
 echo "✅ Wrote $OUT ($(wc -c < "$OUT") bytes)"

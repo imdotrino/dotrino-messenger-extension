@@ -12,7 +12,10 @@
 //   { source:'cc-id-bridge', type:'response', id, result?, error? }
 // (definido en extension/identity-bridge-host.js).
 
+// @ts-check
+
 let _nextId = 1
+/** @type {Map<number, { resolve: (v: any) => void, reject: (e: Error) => void, timer: ReturnType<typeof setTimeout> }>} */
 const _pending = new Map()
 let _wired = false
 
@@ -23,9 +26,11 @@ let _wired = false
 // esperaba 3s a un timeout (y spameaba la consola) en cada arranque. Sondeamos
 // una vez con un timeout corto y cacheamos el resultado; si no hay host, todas
 // las ops se cortan de inmediato devolviendo su default.
+/** @type {Promise<boolean> | null} */
 let _available = null  // Promise<boolean> | null
 const PROBE_TIMEOUT_MS = 800
 
+/** @returns {Promise<boolean>} */
 function probeBridge () {
   ensureWired()
   const target = window.parent !== window ? window.parent : window
@@ -41,7 +46,10 @@ function probeBridge () {
   })
 }
 
-/** True si hay un host del bridge respondiendo (extensión presente). Cacheado. */
+/**
+ * True si hay un host del bridge respondiendo (extensión presente). Cacheado.
+ * @returns {Promise<boolean>}
+ */
 export function bridgeAvailable () {
   if (!_available) _available = probeBridge()
   return _available
@@ -50,6 +58,11 @@ export function bridgeAvailable () {
 // chrome.storage serializa con JSON, así que pasamos un clon JSON-safe: elimina
 // Proxies reactivos de Vue, funciones y demás valores no estructurables-clonables
 // que rompían `postMessage` con "could not be cloned".
+/**
+ * @template T
+ * @param {T} v
+ * @returns {T}
+ */
 function jsonSafe (v) {
   if (v == null || typeof v !== 'object') return v
   try { return JSON.parse(JSON.stringify(v)) } catch { return v }
@@ -62,7 +75,7 @@ function ensureWired () {
     const m = ev.data
     if (!m || m.source !== 'cc-id-bridge') return
     if (m.type === 'response' && _pending.has(m.id)) {
-      const { resolve, reject, timer } = _pending.get(m.id)
+      const { resolve, reject, timer } = /** @type {NonNullable<ReturnType<typeof _pending.get>>} */ (_pending.get(m.id))
       _pending.delete(m.id)
       clearTimeout(timer)
       if (m.error) reject(new Error(m.error))
@@ -71,6 +84,11 @@ function ensureWired () {
   })
 }
 
+/**
+ * @param {string} op
+ * @param {{ blob?: unknown, key?: string, value?: unknown, item?: unknown }} [payload]
+ * @returns {Promise<any>} el `result` del host
+ */
 function call (op, payload = {}) {
   ensureWired()
   // Si estamos en pestaña directa (window === window.top) no hay parent, pero
@@ -97,23 +115,35 @@ function call (op, payload = {}) {
   })
 }
 
-/** Lee el blob de identidad del bridge. Devuelve null si no hay o no hay parent. */
+/**
+ * Lee el blob de identidad del bridge. Devuelve null si no hay o no hay parent.
+ * @returns {Promise<unknown>}
+ */
 export async function getIdentityBlob () {
   if (!(await bridgeAvailable())) return null
   try { return await call('get') }
-  catch (e) { console.warn('[cc-id-bridge] get failed:', e.message); return null }
+  catch (e) { console.warn('[cc-id-bridge] get failed:', /** @type {Error} */ (e).message); return null }
 }
 
-/** Guarda el blob de identidad (snapshot completo) al bridge. */
+/**
+ * Guarda el blob de identidad (snapshot completo) al bridge.
+ * @param {unknown} blob
+ * @returns {Promise<boolean>}
+ */
 export async function setIdentityBlob (blob) {
   if (!(await bridgeAvailable())) return false
   try { await call('set', { blob: jsonSafe(blob) }); return true }
-  catch (e) { console.warn('[cc-id-bridge] set failed:', e.message); return false }
+  catch (e) { console.warn('[cc-id-bridge] set failed:', /** @type {Error} */ (e).message); return false }
 }
 
-/** Suscribe a cambios remotos del blob (otros contextos lo escribieron). */
+/**
+ * Suscribe a cambios remotos del blob (otros contextos lo escribieron).
+ * @param {(blob: unknown) => void} handler
+ * @returns {() => void} para desuscribirse
+ */
 export function onIdentityBlobChanged (handler) {
   ensureWired()
+  /** @param {MessageEvent} ev */
   const listener = (ev) => {
     const m = ev.data
     if (m?.source === 'cc-id-bridge' && m.type === 'changed') handler(m.blob)
@@ -125,26 +155,45 @@ export function onIdentityBlobChanged (handler) {
 // ---- KV genérico (chrome.storage.local) -----------------------------------
 // Las claves deben prefijarse con `cc-` (validado en el host).
 
+/**
+ * @param {string} key empieza por `cc-`
+ * @returns {Promise<any>} el valor guardado, o null
+ */
 export async function kvGet (key) {
   if (!(await bridgeAvailable())) return null
   try { return await call('kv-get', { key }) }
-  catch (e) { console.warn('[cc-id-bridge] kv-get failed:', e.message); return null }
+  catch (e) { console.warn('[cc-id-bridge] kv-get failed:', /** @type {Error} */ (e).message); return null }
 }
 
+/**
+ * @param {string} key empieza por `cc-`
+ * @param {unknown} value
+ * @returns {Promise<true | null>}
+ */
 export async function kvSet (key, value) {
   if (!(await bridgeAvailable())) return null
   try { return await call('kv-set', { key, value: jsonSafe(value) }) }
-  catch (e) { console.warn('[cc-id-bridge] kv-set failed:', e.message); return null }
+  catch (e) { console.warn('[cc-id-bridge] kv-set failed:', /** @type {Error} */ (e).message); return null }
 }
 
+/**
+ * @param {string} key empieza por `cc-`
+ * @param {unknown} item
+ * @returns {Promise<number | null>} el largo del array tras añadir
+ */
 export async function kvAppendArray (key, item) {
   if (!(await bridgeAvailable())) return null
   try { return await call('kv-append-array', { key, item: jsonSafe(item) }) }
-  catch (e) { console.warn('[cc-id-bridge] kv-append failed:', e.message); return null }
+  catch (e) { console.warn('[cc-id-bridge] kv-append failed:', /** @type {Error} */ (e).message); return null }
 }
 
+/**
+ * @param {(key: string, value: any) => void} handler
+ * @returns {() => void} para desuscribirse
+ */
 export function onKvChanged (handler) {
   ensureWired()
+  /** @param {MessageEvent} ev */
   const listener = (ev) => {
     const m = ev.data
     if (m?.source === 'cc-id-bridge' && m.type === 'kv-changed') handler(m.key, m.value)

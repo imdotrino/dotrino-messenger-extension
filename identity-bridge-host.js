@@ -29,14 +29,21 @@
     console.log('[cc-id-bridge:host] skipped (no chrome.storage)', { href: location.href })
     return
   }
+  /** @param {...unknown} a */
   const LOG = (...a) => console.log('[cc-id-bridge:host]', ...a)
   LOG('loaded', {
     href: location.href,
     hasOnChanged: !!chrome?.storage?.onChanged
   })
 
+  /**
+   * @param {MessageEventSource | null} source
+   * @param {string} origin
+   * @param {unknown} id
+   * @param {Record<string, unknown>} payload
+   */
   function reply (source, origin, id, payload) {
-    try { source.postMessage({ source: 'cc-id-bridge', type: 'response', id, ...payload }, origin) }
+    try { /** @type {Window} */ (source).postMessage({ source: 'cc-id-bridge', type: 'response', id, ...payload }, origin) }
     catch (_) {}
   }
 
@@ -77,7 +84,7 @@
       }
     } catch (e) {
       LOG('error', e)
-      reply(event.source, event.origin, id, { error: e?.message || String(e) })
+      reply(event.source, event.origin, id, { error: /** @type {Error} */ (e)?.message || String(e) })
     }
   })
 

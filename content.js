@@ -29,6 +29,7 @@
   let probeOrigin = null
   try { probeOrigin = new URL(PWA_URL).origin } catch (_) {}
 
+  /** @param {MessageEvent} ev */
   const onReady = (ev) => {
     if (ev.source !== probe.contentWindow) return
     if (probeOrigin && ev.origin !== probeOrigin) return
@@ -73,6 +74,7 @@
     // Vive en el Shadow DOM del content script (mismo viewport que la página
     // padre) → `position:fixed` centra realmente en la ventana del navegador,
     // no en el iframe del messenger (que es solo el panel pequeño).
+    /** @param {CcDM} dm */
     function showCenteredCard (dm) {
       const overlay = document.createElement('div')
       overlay.className = 'cc-incoming-overlay phase-hidden'

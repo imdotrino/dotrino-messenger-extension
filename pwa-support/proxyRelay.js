@@ -9,6 +9,8 @@
 // este relay: son interacciones intencionales del usuario, una conexión a
 // la vez es aceptable y mantiene latencia mínima.
 
+// @ts-check
+
 import { kvGet, kvSet, kvAppendArray, onKvChanged } from './identityBridge'
 
 const QUEUE_KEY = 'cc-outbound-v1'
@@ -16,7 +18,14 @@ const QUEUE_KEY = 'cc-outbound-v1'
 let _seq = 0
 const newId = () => `${Date.now()}-${++_seq}`
 
-/** Encola una llamada al proxy. Resuelve cuando se persiste en storage. */
+/** @typedef {{ id: string, method: string, args: unknown[], ts: number }} OutboundItem */
+
+/**
+ * Encola una llamada al proxy. Resuelve cuando se persiste en storage.
+ * @param {string} method
+ * @param {unknown[]} args
+ * @returns {Promise<string>} el id del item encolado
+ */
 export async function relayProxyCall (method, args) {
   const id = newId()
   await kvAppendArray(QUEUE_KEY, { id, method, args, ts: Date.now() })
@@ -31,6 +40,8 @@ export async function relayProxyCall (method, args) {
  * Devuelve `{ drain, dispose }`: `drain()` fuerza un re-procesamiento (útil
  * cuando `isConnected` cambia a true y hay items deferidos), `dispose()` se
  * desuscribe de onKvChanged.
+ * @param {(item: OutboundItem) => Promise<boolean>} processor
+ * @returns {{ drain: () => Promise<void>, dispose: () => void }}
  */
 export function watchOutboundQueue (processor) {
   let inFlight = false
@@ -40,6 +51,7 @@ export function watchOutboundQueue (processor) {
     try {
       const arr = await kvGet(QUEUE_KEY)
       if (!Array.isArray(arr) || arr.length === 0) return
+      /** @type {OutboundItem[]} */
       const remaining = []
       for (const item of arr) {
         try {

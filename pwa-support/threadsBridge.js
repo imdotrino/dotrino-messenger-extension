@@ -6,15 +6,25 @@
 // Sin esto el overlay muestra el chat vacío porque su `messenger.dotrino.com`
 // localStorage está particionado por el site visitado.
 
+// @ts-check
+
 import { kvGet, kvSet, onKvChanged } from './identityBridge'
 
 const BRIDGE_KEY = 'cc-threads-v1'
 const PUSH_DEBOUNCE_MS = 600
 
+/** @typedef {Record<string, unknown[]>} Threads  pubkey → entries */
+
+/** @type {ReturnType<typeof setTimeout> | null} */
 let _pushTimer = null
 let _lastHash = ''
+/** @type {Threads | null} */
 let _pendingThreads = null
 
+/**
+ * @param {unknown} threads
+ * @returns {string}
+ */
 function hashThreads (threads) {
   try {
     const s = JSON.stringify(threads)
@@ -24,7 +34,10 @@ function hashThreads (threads) {
   } catch { return Math.random().toString(36) }
 }
 
-/** Encola un push debounced al bridge con el snapshot actual de threads. */
+/**
+ * Encola un push debounced al bridge con el snapshot actual de threads.
+ * @param {Threads} threads
+ */
 export function pushThreadsToBridge (threads) {
   _pendingThreads = threads
   if (_pushTimer) clearTimeout(_pushTimer)
@@ -40,7 +53,10 @@ export function pushThreadsToBridge (threads) {
   }, PUSH_DEBOUNCE_MS)
 }
 
-/** Lee el snapshot del bridge (objeto pubkey → array de entries). */
+/**
+ * Lee el snapshot del bridge (objeto pubkey → array de entries).
+ * @returns {Promise<Threads | null>}
+ */
 export async function pullThreadsFromBridge () {
   try {
     const v = await kvGet(BRIDGE_KEY)
@@ -49,7 +65,11 @@ export async function pullThreadsFromBridge () {
   } catch { return null }
 }
 
-/** Suscribe a cambios remotos del snapshot. */
+/**
+ * Suscribe a cambios remotos del snapshot.
+ * @param {(threads: Threads) => void} handler
+ * @returns {() => void} para desuscribirse
+ */
 export function onThreadsChanged (handler) {
   return onKvChanged((key, value) => {
     if (key !== BRIDGE_KEY) return
